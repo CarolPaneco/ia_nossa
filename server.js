@@ -71,9 +71,6 @@ function sendJson(res, statusCode, payload) {
 
 function createServer(config = {}) {
   const provider = config.provider ?? process.env.LLM_PROVIDER ?? "openai";
-  const geminiApiKey = config.geminiApiKey ?? process.env.GEMINI_API_KEY ?? (provider === "gemini" ? (config.apiKey ?? process.env.LLM_API_KEY) : undefined);
-  const groqApiKey = config.groqApiKey ?? process.env.GROQ_API_KEY ?? (provider === "groq" ? (config.apiKey ?? process.env.LLM_API_KEY) : undefined);
-
   const defaultApiUrl = provider === "groq"
     ? "https://api.groq.com/openai/v1/chat/completions"
     : provider === "openai"
@@ -90,8 +87,6 @@ function createServer(config = {}) {
     provider,
     apiUrl: config.apiUrl ?? process.env.LLM_API_URL ?? defaultApiUrl,
     apiKey: config.apiKey ?? process.env.LLM_API_KEY,
-    geminiApiKey,
-    groqApiKey,
     model: config.model ?? process.env.LLM_MODEL ?? defaultModel,
     fetchImpl: config.fetchImpl ?? fetch,
   };
@@ -114,17 +109,35 @@ function createServer(config = {}) {
     }
 
     if (requestUrl.pathname === "/api/models" && req.method === "GET") {
-      const models = [
-        "openai/gpt-oss-120b",
-        "openai/gpt-oss-20b",
-        "qwen/qwen3.8-27b",
-        "gemini-3.8-flash",
-      ];
-      sendJson(res, 200, {
-        provider: settings.provider,
-        hasGemini: Boolean(geminiApiKey || settings.provider === "gemini"),
-        models,
-      });
+      if (!settings.apiKey) {
+        sendJson(res, 503, { error: "Chave de API não configurada." });
+        return;
+      }
+      try {
+        let modelsUrl;
+        const headers = {};
+        if (settings.provider === "gemini") {
+          modelsUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(settings.apiKey)}`;
+        } else {
+          modelsUrl = settings.provider === "groq"
+            ? "https://api.groq.com/openai/v1/models"
+            : (settings.apiUrl ? new URL("/v1/models", settings.apiUrl).toString() : "https://api.openai.com/v1/models");
+          headers.Authorization = `Bearer ${settings.apiKey}`;
+        }
+        const resp = await settings.fetchImpl(modelsUrl, { headers, signal: AbortSignal.timeout(15_000) });
+        if (!resp.ok) {
+          const errText = await resp.text();
+          sendJson(res, resp.status, { error: `Erro ao buscar modelos (${resp.status}): ${errText.slice(0, 300)}` });
+          return;
+        }
+        const data = await resp.json();
+        const models = settings.provider === "gemini"
+          ? (data.models || []).map((m) => m.name.replace("models/", ""))
+          : (data.data || []).map((m) => m.id);
+        sendJson(res, 200, { provider: settings.provider, count: models.length, models });
+      } catch (err) {
+        sendJson(res, 500, { error: err.message });
+      }
       return;
     }
 
@@ -198,23 +211,11 @@ function createServer(config = {}) {
         ? payload.model.trim()
         : settings.model;
 
-      const isGemini = chosenModel.toLowerCase().startsWith("gemini") || payload.provider === "gemini" || settings.provider === "gemini";
-      const targetApiKey = isGemini ? (settings.geminiApiKey || settings.apiKey) : (settings.groqApiKey || settings.apiKey);
-
-      if (!targetApiKey || !chosenModel) {
-        sendJson(res, 503, {
-          error: isGemini
-            ? "A chave do Gemini (GEMINI_API_KEY) ainda não foi cadastrada no servidor."
-            : "O serviço de IA ainda não foi configurado pela equipe responsável.",
-        });
-        return;
-      }
-
       let endpoint;
       try {
-        endpoint = isGemini
+        endpoint = settings.provider === "gemini"
           ? new URL(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(chosenModel)}:generateContent`)
-          : new URL(settings.apiUrl || "https://api.groq.com/openai/v1/chat/completions");
+          : new URL(settings.apiUrl);
       } catch {
         sendJson(res, 503, { error: "A URL da API configurada é inválida." });
         return;
@@ -227,32 +228,30 @@ function createServer(config = {}) {
       try {
         const headers = { "Content-Type": "application/json" };
         let requestBody;
-        if (isGemini) {
-          headers["x-goog-api-key"] = targetApiKey;
+        if (settings.provider === "gemini") {
+          headers["x-goog-api-key"] = settings.apiKey;
           requestBody = {
-            contents: payload.messages
-              .filter((m) => m.role !== "system")
-              .map((message) => {
-                const parts = [{ text: message.content }];
-                if (message.image && typeof message.image === "string" && message.image.startsWith("data:")) {
-                  const match = message.image.match(/^data:([^;]+);base64,(.+)$/);
-                  if (match) {
-                    parts.push({
-                      inline_data: {
-                        mime_type: match[1],
-                        data: match[2],
-                      },
-                    });
-                  }
+            contents: payload.messages.map((message) => {
+              const parts = [{ text: message.content }];
+              if (message.image && typeof message.image === "string" && message.image.startsWith("data:")) {
+                const match = message.image.match(/^data:([^;]+);base64,(.+)$/);
+                if (match) {
+                  parts.push({
+                    inline_data: {
+                      mime_type: match[1],
+                      data: match[2],
+                    },
+                  });
                 }
-                return {
-                  role: message.role === "assistant" ? "model" : "user",
-                  parts,
-                };
-              }),
+              }
+              return {
+                role: message.role === "assistant" ? "model" : "user",
+                parts,
+              };
+            }),
           };
         } else {
-          headers.Authorization = `Bearer ${targetApiKey}`;
+          headers.Authorization = `Bearer ${settings.apiKey}`;
           requestBody = {
             model: chosenModel,
             messages: payload.messages.map((message) => {
@@ -298,7 +297,7 @@ function createServer(config = {}) {
           }
 
           console.error(`O provedor de IA (${endpoint.hostname}) respondeu com HTTP ${upstream.status}.`);
-          const providerLabel = isGemini ? "Gemini" : "Provedor";
+          const providerLabel = settings.provider === "gemini" ? "Gemini" : "Provedor";
           const detail = typeof providerMessage === "string" && providerMessage.trim()
             ? ` ${providerLabel}: ${providerMessage.slice(0, 300)}`
             : "";
@@ -320,7 +319,7 @@ function createServer(config = {}) {
           return;
         }
 
-        const answer = isGemini
+        const answer = settings.provider === "gemini"
           ? responseData?.candidates?.[0]?.content?.parts
             ?.map((part) => part.text)
             .filter((text) => typeof text === "string")

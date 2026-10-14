@@ -38,10 +38,10 @@ async function loadAvailableModels() {
           const opt = document.createElement("option");
           opt.value = model;
           let label = model;
-          if (model === "openai/gpt-oss-120b") label = "GPT-OSS 120B (Groq)";
-          else if (model === "openai/gpt-oss-20b") label = "GPT-OSS 20B (Groq)";
-          else if (model === "qwen/qwen3.8-27b") label = "Qwen 27B (Groq - Visão)";
-          else if (model === "gemini-3.8-flash") label = "Gemini 3.8 Flash (Google)";
+          if (model === "openai/gpt-oss-120b") label = "GPT-OSS 120B (Mais potente)";
+          else if (model === "openai/gpt-oss-20b") label = "GPT-OSS 20B (Rápido)";
+          else if (model === "qwen/qwen3.8-27b") label = "Qwen 27B (Imagens & Visão)";
+          else if (model === "gemini-3.8-flash") label = "Gemini 3.8 Flash";
           opt.textContent = label;
           modelSelect.append(opt);
         }
