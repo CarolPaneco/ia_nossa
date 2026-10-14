@@ -175,3 +175,52 @@ test("logs a sanitized network diagnostic when Gemini fetch fails", async () => 
     await new Promise((resolve, reject) => geminiServer.close((error) => error ? reject(error) : resolve()));
   }
 });
+
+test("generates image URL from prompt", async () => {
+  const response = await fetch(`${baseUrl}/api/generate-image`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt: "um lindo por do sol" }),
+  });
+  assert.equal(response.status, 200);
+  const data = await response.json();
+  assert.match(data.imageUrl, /image\.pollinations\.ai/);
+  assert.equal(data.prompt, "um lindo por do sol");
+});
+
+test("supports dynamic model override and image attachments", async () => {
+  let receivedBody;
+  const mockServer = createServer({
+    provider: "groq",
+    apiKey: "dummy-key",
+    fetchImpl: async (url, options) => {
+      receivedBody = JSON.parse(options.body);
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: "Vejo a imagem claramente." } }],
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    },
+  });
+  await new Promise((resolve) => mockServer.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${mockServer.address().port}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "qwen/qwen3.8-27b",
+        messages: [{
+          role: "user",
+          content: "O que tem aqui?",
+          image: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+        }],
+      }),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(receivedBody.model, "qwen/qwen3.8-27b");
+    assert.equal(Array.isArray(receivedBody.messages[0].content), true);
+    assert.equal(receivedBody.messages[0].content[1].type, "image_url");
+  } finally {
+    await new Promise((resolve, reject) => mockServer.close((error) => error ? reject(error) : resolve()));
+  }
+});
+

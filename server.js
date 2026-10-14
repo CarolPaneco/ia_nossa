@@ -3,10 +3,10 @@ const path = require("node:path");
 const fs = require("node:fs");
 
 const PUBLIC_DIR = path.join(__dirname, "public");
-const MAX_BODY_BYTES = 32 * 1024;
-const MAX_RESPONSE_BYTES = 1024 * 1024;
-const MAX_MESSAGES = 20;
-const MAX_MESSAGE_LENGTH = 8000;
+const MAX_BODY_BYTES = 15 * 1024 * 1024;
+const MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
+const MAX_MESSAGES = 30;
+const MAX_MESSAGE_LENGTH = 500_000;
 
 const STATIC_FILES = {
   "/": ["index.html", "text/html; charset=utf-8"],
@@ -55,7 +55,8 @@ function validateMessages(messages) {
       ["user", "assistant"].includes(message.role) &&
       typeof message.content === "string" &&
       message.content.trim().length > 0 &&
-      message.content.length <= MAX_MESSAGE_LENGTH,
+      message.content.length <= MAX_MESSAGE_LENGTH &&
+      (message.image === undefined || typeof message.image === "string"),
   ) && messages[messages.length - 1].role === "user";
 }
 
@@ -76,7 +77,7 @@ function createServer(config = {}) {
       : undefined;
 
   const defaultModel = provider === "groq"
-    ? "llama-3.1-8b-instant"
+    ? "openai/gpt-oss-120b"
     : provider === "gemini"
       ? "gemini-3.8-flash"
       : undefined;
@@ -93,7 +94,10 @@ function createServer(config = {}) {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Referrer-Policy", "no-referrer");
     res.setHeader("X-Frame-Options", "DENY");
-    res.setHeader("Content-Security-Policy", "default-src 'self'; connect-src 'self'; style-src 'self'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
+    res.setHeader(
+      "Content-Security-Policy",
+      "default-src 'self'; connect-src 'self' https:; img-src 'self' data: https: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+    );
 
     let requestUrl;
     try {
@@ -136,6 +140,30 @@ function createServer(config = {}) {
       return;
     }
 
+    if (requestUrl.pathname === "/api/generate-image") {
+      if (req.method !== "POST") {
+        res.setHeader("Allow", "POST");
+        sendJson(res, 405, { error: "Método não permitido." });
+        return;
+      }
+      let payload;
+      try {
+        payload = await readJsonBody(req);
+      } catch (error) {
+        sendJson(res, error.statusCode ?? 400, { error: "Não foi possível ler a solicitação." });
+        return;
+      }
+      if (!payload?.prompt || typeof payload.prompt !== "string" || !payload.prompt.trim()) {
+        sendJson(res, 400, { error: "Envie uma descrição para a imagem." });
+        return;
+      }
+      const prompt = payload.prompt.trim().slice(0, 1000);
+      const seed = Math.floor(Math.random() * 1_000_000);
+      const imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&nologo=true&seed=${seed}`;
+      sendJson(res, 200, { imageUrl, prompt });
+      return;
+    }
+
     if (requestUrl.pathname === "/api/chat") {
       if (req.method !== "POST") {
         res.setHeader("Allow", "POST");
@@ -150,20 +178,6 @@ function createServer(config = {}) {
 
       if (!settings.apiKey || !settings.model || (["openai", "groq"].includes(settings.provider) && !settings.apiUrl)) {
         sendJson(res, 503, { error: "O serviço de IA ainda não foi configurado pela equipe responsável." });
-        return;
-      }
-
-      let endpoint;
-      try {
-        endpoint = settings.provider === "gemini"
-          ? new URL(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(settings.model)}:generateContent`)
-          : new URL(settings.apiUrl);
-      } catch {
-        sendJson(res, 503, { error: "A URL da API configurada é inválida." });
-        return;
-      }
-      if (endpoint.protocol !== "https:") {
-        sendJson(res, 503, { error: "A API deve usar uma conexão HTTPS segura." });
         return;
       }
 
@@ -182,22 +196,68 @@ function createServer(config = {}) {
         return;
       }
 
+      const chosenModel = (typeof payload.model === "string" && payload.model.trim())
+        ? payload.model.trim()
+        : settings.model;
+
+      let endpoint;
+      try {
+        endpoint = settings.provider === "gemini"
+          ? new URL(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(chosenModel)}:generateContent`)
+          : new URL(settings.apiUrl);
+      } catch {
+        sendJson(res, 503, { error: "A URL da API configurada é inválida." });
+        return;
+      }
+      if (endpoint.protocol !== "https:") {
+        sendJson(res, 503, { error: "A API deve usar uma conexão HTTPS segura." });
+        return;
+      }
+
       try {
         const headers = { "Content-Type": "application/json" };
         let requestBody;
         if (settings.provider === "gemini") {
           headers["x-goog-api-key"] = settings.apiKey;
           requestBody = {
-            contents: payload.messages.map((message) => ({
-              role: message.role === "assistant" ? "model" : "user",
-              parts: [{ text: message.content }],
-            })),
+            contents: payload.messages.map((message) => {
+              const parts = [{ text: message.content }];
+              if (message.image && typeof message.image === "string" && message.image.startsWith("data:")) {
+                const match = message.image.match(/^data:([^;]+);base64,(.+)$/);
+                if (match) {
+                  parts.push({
+                    inline_data: {
+                      mime_type: match[1],
+                      data: match[2],
+                    },
+                  });
+                }
+              }
+              return {
+                role: message.role === "assistant" ? "model" : "user",
+                parts,
+              };
+            }),
           };
         } else {
           headers.Authorization = `Bearer ${settings.apiKey}`;
           requestBody = {
-            model: settings.model,
-            messages: payload.messages,
+            model: chosenModel,
+            messages: payload.messages.map((message) => {
+              if (message.image && typeof message.image === "string" && message.image.startsWith("data:")) {
+                return {
+                  role: message.role,
+                  content: [
+                    { type: "text", text: message.content },
+                    { type: "image_url", image_url: { url: message.image } },
+                  ],
+                };
+              }
+              return {
+                role: message.role,
+                content: message.content,
+              };
+            }),
             stream: false,
           };
         }
