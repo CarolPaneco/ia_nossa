@@ -103,6 +103,39 @@ function createServer(config = {}) {
       return;
     }
 
+    if (requestUrl.pathname === "/api/models" && req.method === "GET") {
+      if (!settings.apiKey) {
+        sendJson(res, 503, { error: "Chave de API não configurada." });
+        return;
+      }
+      try {
+        let modelsUrl;
+        const headers = {};
+        if (settings.provider === "gemini") {
+          modelsUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(settings.apiKey)}`;
+        } else {
+          modelsUrl = settings.provider === "groq"
+            ? "https://api.groq.com/openai/v1/models"
+            : (settings.apiUrl ? new URL("/v1/models", settings.apiUrl).toString() : "https://api.openai.com/v1/models");
+          headers.Authorization = `Bearer ${settings.apiKey}`;
+        }
+        const resp = await settings.fetchImpl(modelsUrl, { headers, signal: AbortSignal.timeout(15_000) });
+        if (!resp.ok) {
+          const errText = await resp.text();
+          sendJson(res, resp.status, { error: `Erro ao buscar modelos (${resp.status}): ${errText.slice(0, 300)}` });
+          return;
+        }
+        const data = await resp.json();
+        const models = settings.provider === "gemini"
+          ? (data.models || []).map((m) => m.name.replace("models/", ""))
+          : (data.data || []).map((m) => m.id);
+        sendJson(res, 200, { provider: settings.provider, count: models.length, models });
+      } catch (err) {
+        sendJson(res, 500, { error: err.message });
+      }
+      return;
+    }
+
     if (requestUrl.pathname === "/api/chat") {
       if (req.method !== "POST") {
         res.setHeader("Allow", "POST");
