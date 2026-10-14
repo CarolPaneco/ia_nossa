@@ -72,7 +72,7 @@ function createServer(config = {}) {
     provider: config.provider ?? process.env.LLM_PROVIDER ?? "openai",
     apiUrl: config.apiUrl ?? process.env.LLM_API_URL,
     apiKey: config.apiKey ?? process.env.LLM_API_KEY,
-    model: config.model ?? process.env.LLM_MODEL ?? ((config.provider ?? process.env.LLM_PROVIDER) === "gemini" ? "gemini-2.5-flash" : undefined),
+    model: config.model ?? process.env.LLM_MODEL ?? ((config.provider ?? process.env.LLM_PROVIDER) === "gemini" ? "gemini-3.8-flash" : undefined),
     fetchImpl: config.fetchImpl ?? fetch,
   };
 
@@ -180,8 +180,9 @@ function createServer(config = {}) {
           }
 
           console.error(`O provedor de IA respondeu com HTTP ${upstream.status}.`);
+          const providerLabel = settings.provider === "gemini" ? "Gemini" : "Provedor";
           const detail = typeof providerMessage === "string" && providerMessage.trim()
-            ? ` Gemini: ${providerMessage.slice(0, 300)}`
+            ? ` ${providerLabel}: ${providerMessage.slice(0, 300)}`
             : "";
           sendJson(res, 502, { error: `O provedor de IA respondeu com HTTP ${upstream.status}.${detail}` });
           return;
@@ -222,7 +223,7 @@ function createServer(config = {}) {
         const networkError = ["ENOTFOUND", "ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "EAI_AGAIN"].includes(causeCode);
         const timedOut = error.name === "TimeoutError" || error.name === "AbortError";
         const message = networkError
-          ? "Não foi possível alcançar o Gemini. Verifique a conexão ou consulte a equipe de TI sobre o acesso à API."
+          ? "Não foi possível alcançar o provedor de IA. Verifique a conexão ou consulte a equipe de TI sobre o acesso à API."
           : timedOut
             ? "A conexão com o provedor de IA excedeu o tempo limite. Tente novamente."
             : "Não foi possível conectar ao provedor de IA. Verifique a conexão e tente novamente.";
