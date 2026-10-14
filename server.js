@@ -12,6 +12,7 @@ const STATIC_FILES = {
   "/": ["index.html", "text/html; charset=utf-8"],
   "/app.js": ["app.js", "text/javascript; charset=utf-8"],
   "/style.css": ["style.css", "text/css; charset=utf-8"],
+  "/marked.min.js": ["marked.min.js", "text/javascript; charset=utf-8"],
 };
 
 function readJsonBody(req) {
@@ -159,8 +160,18 @@ function createServer(config = {}) {
       }
       const prompt = payload.prompt.trim().slice(0, 1000);
       const seed = Math.floor(Math.random() * 1_000_000);
-      const imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&nologo=true&seed=${seed}`;
-      sendJson(res, 200, { imageUrl, prompt });
+      const targetUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=768&height=768&nologo=true&seed=${seed}`;
+      try {
+        const imgResp = await settings.fetchImpl(targetUrl, { signal: AbortSignal.timeout(35_000) });
+        if (!imgResp.ok) throw new Error("Falha ao gerar imagem.");
+        const buffer = await imgResp.arrayBuffer();
+        const mime = imgResp.headers.get("content-type") || "image/jpeg";
+        const base64 = Buffer.from(buffer).toString("base64");
+        const dataUrl = `data:${mime};base64,${base64}`;
+        sendJson(res, 200, { imageUrl: dataUrl, prompt });
+      } catch {
+        sendJson(res, 200, { imageUrl: targetUrl, prompt });
+      }
       return;
     }
 

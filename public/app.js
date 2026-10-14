@@ -6,7 +6,7 @@ const errorMessage = document.querySelector("#error");
 const modelSelect = document.querySelector("#model-select");
 const attachBtn = document.querySelector("#attach-btn");
 const fileInput = document.querySelector("#file-input");
-const imageModeBtn = document.querySelector("#image-mode-btn");
+const newChatBtn = document.querySelector("#new-chat-btn");
 const attachmentPreview = document.querySelector("#attachment-preview");
 const attachmentIcon = document.querySelector("#attachment-icon");
 const attachmentName = document.querySelector("#attachment-name");
@@ -16,14 +16,52 @@ const attachmentRemove = document.querySelector("#attachment-remove");
 const conversation = [];
 let currentAttachment = null;
 
-// Carregar modelos disponíveis na inicialização
+// Configurar o renderizador do Marked (para suportar Tabelas, Citações e Códigos perfeitamente)
+function setupMarked() {
+  if (typeof window.marked !== "undefined") {
+    const renderer = new window.marked.Renderer();
+
+    // Customizar renderização de blocos de código
+    renderer.code = function (codeText, lang) {
+      const code = typeof codeText === "object" ? codeText.text || "" : codeText || "";
+      const language = (typeof codeText === "object" ? codeText.lang : lang) || "código";
+      const escapedCode = escapeHtml(code);
+      return `
+        <div class="code-container">
+          <div class="code-header">
+            <span class="code-lang">${escapeHtml(language)}</span>
+            <button type="button" class="copy-code-btn" data-code="${encodeURIComponent(code)}">
+              📋 Copiar código
+            </button>
+          </div>
+          <pre><code class="language-${escapeHtml(language)}">${escapedCode}</code></pre>
+        </div>
+      `;
+    };
+
+    // Envolver tabelas em um container responsivo com barra de rolagem se necessário
+    renderer.table = function (header, body) {
+      const h = typeof header === "object" ? header.header || "" : header;
+      const b = typeof header === "object" ? header.rows || "" : body;
+      return `<div class="table-container"><table><thead>${h}</thead><tbody>${b}</tbody></table></div>`;
+    };
+
+    window.marked.setOptions({
+      renderer,
+      gfm: true,
+      breaks: true,
+    });
+  }
+}
+setupMarked();
+
+// Carregar modelos disponíveis na inicialização (filtrando modelos não compatíveis)
 async function loadAvailableModels() {
   try {
     const res = await fetch("/api/models");
     if (!res.ok) return;
     const data = await res.json();
     if (Array.isArray(data.models) && data.models.length > 0) {
-      // Filtrar modelos recomendados para chat / visão (remover áudio, guardrails e modelos em árabe)
       const textModels = data.models.filter(
         (m) =>
           !m.includes("whisper") &&
@@ -39,28 +77,27 @@ async function loadAvailableModels() {
           const opt = document.createElement("option");
           opt.value = model;
           let label = model;
-          if (model === "openai/gpt-oss-120b") label = "GPT-OSS 120B (Mais potente / Código)";
+          if (model === "openai/gpt-oss-120b") label = "GPT-OSS 120B (Mais potente)";
           else if (model === "openai/gpt-oss-20b") label = "GPT-OSS 20B (Rápido)";
           else if (model === "qwen/qwen3.8-27b") label = "Qwen 27B (Imagens & Visão)";
           else if (model === "gemini-3.8-flash") label = "Gemini 3.8 Flash";
           opt.textContent = label;
           modelSelect.append(opt);
         }
-        // Garantir que o mais potente seja o padrão
         if (textModels.includes("openai/gpt-oss-120b")) {
           modelSelect.value = "openai/gpt-oss-120b";
         }
       }
     }
   } catch {
-    // Mantém as opções padrão caso a consulta falhe
+    // Mantém fallback
   }
 }
 loadAvailableModels();
 
-// Sanitização básica contra XSS
+// Sanitização básica
 function escapeHtml(str) {
-  return str
+  return String(str || "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
@@ -68,62 +105,19 @@ function escapeHtml(str) {
     .replaceAll("'", "&#039;");
 }
 
-// Renderizador de Markdown em HTML
-function renderMarkdown(rawText) {
-  // 1. Isolar blocos de código ```lang ... ```
-  const codeBlocks = [];
-  let processed = rawText.replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, (match, lang, code) => {
-    const id = `__CODE_BLOCK_${codeBlocks.length}__`;
-    codeBlocks.push({ lang: lang || "codigo", code });
-    return id;
-  });
-
-  // 2. Escapar HTML no restante do texto
-  processed = escapeHtml(processed);
-
-  // 3. Títulos (#, ##, ###)
-  processed = processed.replace(/^### (.*$)/gim, "<h3>$1</h3>");
-  processed = processed.replace(/^## (.*$)/gim, "<h2>$1</h2>");
-  processed = processed.replace(/^# (.*$)/gim, "<h1>$1</h1>");
-
-  // 4. Negrito e Itálico
-  processed = processed.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
-  processed = processed.replace(/\*(.*?)\*/g, "<em>$1</em>");
-
-  // 5. Código inline `code`
-  processed = processed.replace(/`([^`]+)`/g, "<code>$1</code>");
-
-  // 6. Listas não ordenadas
-  processed = processed.replace(/^\s*[-*]\s+(.*)$/gim, "<li>$1</li>");
-  processed = processed.replace(/(<li>.*<\/li>)/gms, "<ul>$1</ul>");
-
-  // 7. Quebras de linha
-  processed = processed.replace(/\n\n+/g, "</p><p>");
-  processed = processed.replace(/\n/g, "<br>");
-  processed = `<p>${processed}</p>`;
-
-  // 8. Reintroduzir blocos de código formatados com botão de cópia
-  for (let i = 0; i < codeBlocks.length; i++) {
-    const { lang, code } = codeBlocks[i];
-    const escapedCode = escapeHtml(code);
-    const blockHtml = `
-      <div class="code-container">
-        <div class="code-header">
-          <span class="code-lang">${escapeHtml(lang)}</span>
-          <button type="button" class="copy-code-btn" data-code="${encodeURIComponent(code)}">
-            📋 Copiar código
-          </button>
-        </div>
-        <pre><code class="language-${escapeHtml(lang)}">${escapedCode}</code></pre>
-      </div>
-    `;
-    processed = processed.replace(`__CODE_BLOCK_${i}__`, blockHtml);
+// Renderizar Markdown em HTML completo
+function renderContent(rawText) {
+  if (typeof window.marked !== "undefined" && typeof window.marked.parse === "function") {
+    try {
+      return window.marked.parse(rawText);
+    } catch {
+      // Fallback se o marked der erro
+    }
   }
-
-  return processed;
+  return `<p>${escapeHtml(rawText).replace(/\n\n+/g, "</p><p>").replace(/\n/g, "<br>")}</p>`;
 }
 
-// Criar elemento de mensagem na tela
+// Criar mensagem no chat
 function addMessage(role, content, options = {}) {
   const article = document.createElement("article");
   article.className = `message ${role === "user" ? "user-message" : "assistant-message"}`;
@@ -132,14 +126,18 @@ function addMessage(role, content, options = {}) {
     const avatar = document.createElement("div");
     avatar.className = "avatar";
     avatar.setAttribute("aria-hidden", "true");
-    avatar.textContent = "IA";
+    avatar.innerHTML = `
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+        <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2"/>
+      </svg>
+    `;
     article.append(avatar);
   }
 
   const bubble = document.createElement("div");
   bubble.className = "bubble";
 
-  // Se houver anexo visual de imagem enviado pelo usuário
+  // Se o usuário anexou imagem
   if (options.userImage) {
     const imgEl = document.createElement("img");
     imgEl.src = options.userImage;
@@ -148,7 +146,7 @@ function addMessage(role, content, options = {}) {
     bubble.append(imgEl);
   }
 
-  // Se houver anexo de documento no card do usuário
+  // Se o usuário anexou documento
   if (options.docName) {
     const badge = document.createElement("div");
     badge.className = "doc-badge";
@@ -180,10 +178,10 @@ function addMessage(role, content, options = {}) {
     imgContainer.append(img, actions);
     bubble.append(imgContainer);
   } else {
-    // Conteúdo de texto / markdown
+    // Markdown com suporte a tabelas, citações, listas e formatação
     const mdContainer = document.createElement("div");
     mdContainer.className = "markdown-body";
-    mdContainer.innerHTML = renderMarkdown(content);
+    mdContainer.innerHTML = renderContent(content);
     bubble.append(mdContainer);
 
     // Barra de ações (Copiar, Baixar TXT/DOC/PDF) para respostas da IA
@@ -191,7 +189,6 @@ function addMessage(role, content, options = {}) {
       const actionsBar = document.createElement("div");
       actionsBar.className = "message-actions-bar";
 
-      // 1. Botão Copiar Texto
       const copyBtn = document.createElement("button");
       copyBtn.type = "button";
       copyBtn.className = "action-pill-btn";
@@ -202,26 +199,23 @@ function addMessage(role, content, options = {}) {
         setTimeout(() => (copyBtn.textContent = "📋 Copiar"), 2000);
       });
 
-      // 2. Botão Baixar .TXT
       const downloadTxtBtn = document.createElement("button");
       downloadTxtBtn.type = "button";
       downloadTxtBtn.className = "action-pill-btn";
-      downloadTxtBtn.textContent = "📄 Baixar .TXT";
+      downloadTxtBtn.textContent = "📄 .TXT";
       downloadTxtBtn.addEventListener("click", () => {
         downloadBlob(content, "resposta-ia.txt", "text/plain;charset=utf-8");
       });
 
-      // 3. Botão Baixar .DOC (Word)
       const downloadDocBtn = document.createElement("button");
       downloadDocBtn.type = "button";
       downloadDocBtn.className = "action-pill-btn";
-      downloadDocBtn.textContent = "📝 Baixar .DOC";
+      downloadDocBtn.textContent = "📝 .DOC";
       downloadDocBtn.addEventListener("click", () => {
-        const docContent = `<html><head><meta charset="utf-8"></head><body>${renderMarkdown(content)}</body></html>`;
+        const docContent = `<html><head><meta charset="utf-8"></head><body>${renderContent(content)}</body></html>`;
         downloadBlob(docContent, "resposta-ia.doc", "application/msword;charset=utf-8");
       });
 
-      // 4. Botão Imprimir / Salvar PDF
       const pdfBtn = document.createElement("button");
       pdfBtn.type = "button";
       pdfBtn.className = "action-pill-btn";
@@ -245,7 +239,7 @@ function addMessage(role, content, options = {}) {
       const rawCode = decodeURIComponent(btn.dataset.code || "");
       await navigator.clipboard.writeText(rawCode);
       const originalText = btn.textContent;
-      btn.textContent = "✓ Código copiado!";
+      btn.textContent = "✓ Copiado!";
       setTimeout(() => (btn.textContent = originalText), 2000);
     });
   });
@@ -263,7 +257,21 @@ function downloadBlob(content, fileName, mimeType) {
   URL.revokeObjectURL(url);
 }
 
-// Manipulação de Anexos (Documentos e Imagens)
+// Botão Novo Chat
+if (newChatBtn) {
+  newChatBtn.addEventListener("click", () => {
+    conversation.length = 0;
+    messagesContainer.innerHTML = "";
+    addMessage("assistant", "Conversa reiniciada. Como posso ajudar você agora?");
+    promptInput.value = "";
+    currentAttachment = null;
+    attachmentPreview.hidden = true;
+    errorMessage.hidden = true;
+    promptInput.focus();
+  });
+}
+
+// Manipulação de Anexos
 attachBtn.addEventListener("click", () => fileInput.click());
 
 fileInput.addEventListener("change", (e) => {
@@ -282,7 +290,6 @@ fileInput.addEventListener("change", (e) => {
         dataUrl: reader.result,
       };
       showAttachmentPreview("🖼️", file.name, currentAttachment.size);
-      // Se houver modelo de visão como Qwen, seleciona automaticamente
       const hasVision = Array.from(modelSelect.options).some((o) => o.value.includes("qwen"));
       if (hasVision) {
         modelSelect.value = "qwen/qwen3.8-27b";
@@ -290,7 +297,6 @@ fileInput.addEventListener("change", (e) => {
     };
     reader.readAsDataURL(file);
   } else {
-    // Arquivo de texto / documento
     reader.onload = () => {
       currentAttachment = {
         type: "document",
@@ -324,19 +330,13 @@ function formatBytes(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-// Botão rápido de modo de imagem
-imageModeBtn.addEventListener("click", () => {
-  promptInput.value = "/imagem ";
-  promptInput.focus();
-});
-
+// Detectar se o usuário pediu para gerar uma imagem
 function extractImagePrompt(text) {
   const clean = text.trim();
   if (clean.toLowerCase().startsWith("/imagem")) {
     return clean.replace(/^\/imagem\s*/i, "").trim();
   }
 
-  // Identificar comandos naturais como "desenhe...", "gere uma imagem de...", etc.
   const pattern = /^\s*(desenhe|desenha|gere\s+uma\s+imagem|crie\s+uma\s+imagem|fa[çc]a\s+uma\s+imagem|gera\s+uma\s+imagem|cria\s+uma\s+imagem|gere\s+uma\s+foto|crie\s+uma\s+foto|fa[çc]a\s+uma\s+foto|imagem\s+de|foto\s+de)\s*(de\s+|do\s+|da\s+|um\s+|uma\s+)?(.*)$/i;
   const match = clean.match(pattern);
   if (match && match[3]?.trim()) {
@@ -361,7 +361,7 @@ form.addEventListener("submit", async (event) => {
   fileInput.value = "";
   attachmentPreview.hidden = true;
 
-  // 1. FLUXO DE GERAÇÃO DE IMAGEM (Detectado automaticamente ou por /imagem)
+  // 1. FLUXO DE GERAÇÃO DE IMAGEM
   const detectedImagePrompt = extractImagePrompt(prompt);
   if (detectedImagePrompt !== null) {
     if (!detectedImagePrompt) {
@@ -372,7 +372,6 @@ form.addEventListener("submit", async (event) => {
 
     addMessage("user", prompt);
     sendButton.disabled = true;
-    sendButton.querySelector("span").textContent = "Gerando imagem...";
 
     try {
       const response = await fetch("/api/generate-image", {
@@ -391,13 +390,12 @@ form.addEventListener("submit", async (event) => {
       errorMessage.hidden = false;
     } finally {
       sendButton.disabled = false;
-      sendButton.querySelector("span").textContent = "Enviar";
       promptInput.focus();
     }
     return;
   }
 
-  // 2. FLUXO PADRÃO DE CHAT (Texto, Documento, Visão de Imagem)
+  // 2. FLUXO PADRÃO DE CHAT
   let userText = prompt;
   let userImage = null;
 
@@ -421,11 +419,10 @@ form.addEventListener("submit", async (event) => {
   });
 
   sendButton.disabled = true;
-  sendButton.querySelector("span").textContent = "Enviando...";
 
   const systemMessage = {
     role: "system",
-    content: "Você é um assistente de inteligência artificial útil e competente. Responda SEMPRE em português do Brasil de forma clara, natural e com formatação Markdown e blocos de código quando apropriado.",
+    content: "Você é um assistente de inteligência artificial de ponta. Responda SEMPRE em português do Brasil com clareza, cordialidade e precisão. Use tabelas Markdown, blocos de código com linguagem e citações em destaque sempre que útil.",
   };
 
   try {
@@ -448,14 +445,13 @@ form.addEventListener("submit", async (event) => {
     conversation.pop();
   } finally {
     sendButton.disabled = false;
-    sendButton.querySelector("span").textContent = "Enviar";
     promptInput.focus();
   }
 });
 
 promptInput.addEventListener("input", () => {
   promptInput.style.height = "auto";
-  promptInput.style.height = `${Math.min(promptInput.scrollHeight, 160)}px`;
+  promptInput.style.height = `${Math.min(promptInput.scrollHeight, 180)}px`;
 });
 
 promptInput.addEventListener("keydown", (event) => {
