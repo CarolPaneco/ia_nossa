@@ -68,11 +68,24 @@ function sendJson(res, statusCode, payload) {
 }
 
 function createServer(config = {}) {
+  const provider = config.provider ?? process.env.LLM_PROVIDER ?? "openai";
+  const defaultApiUrl = provider === "groq"
+    ? "https://api.groq.com/openai/v1/chat/completions"
+    : provider === "openai"
+      ? (config.apiUrl ?? process.env.LLM_API_URL)
+      : undefined;
+
+  const defaultModel = provider === "groq"
+    ? "llama-3.1-8b-instant"
+    : provider === "gemini"
+      ? "gemini-3.8-flash"
+      : undefined;
+
   const settings = {
-    provider: config.provider ?? process.env.LLM_PROVIDER ?? "openai",
-    apiUrl: config.apiUrl ?? process.env.LLM_API_URL,
+    provider,
+    apiUrl: config.apiUrl ?? process.env.LLM_API_URL ?? defaultApiUrl,
     apiKey: config.apiKey ?? process.env.LLM_API_KEY,
-    model: config.model ?? process.env.LLM_MODEL ?? ((config.provider ?? process.env.LLM_PROVIDER) === "gemini" ? "gemini-3.8-flash" : undefined),
+    model: config.model ?? process.env.LLM_MODEL ?? defaultModel,
     fetchImpl: config.fetchImpl ?? fetch,
   };
 
@@ -97,12 +110,12 @@ function createServer(config = {}) {
         return;
       }
 
-      if (!["openai", "gemini"].includes(settings.provider)) {
+      if (!["openai", "gemini", "groq"].includes(settings.provider)) {
         sendJson(res, 503, { error: "O provedor de IA configurado não é compatível." });
         return;
       }
 
-      if (!settings.apiKey || !settings.model || (settings.provider === "openai" && !settings.apiUrl)) {
+      if (!settings.apiKey || !settings.model || (["openai", "groq"].includes(settings.provider) && !settings.apiUrl)) {
         sendJson(res, 503, { error: "O serviço de IA ainda não foi configurado pela equipe responsável." });
         return;
       }
@@ -179,12 +192,12 @@ function createServer(config = {}) {
             providerMessage = undefined;
           }
 
-          console.error(`O provedor de IA respondeu com HTTP ${upstream.status}.`);
+          console.error(`O provedor de IA (${endpoint.hostname}) respondeu com HTTP ${upstream.status}.`);
           const providerLabel = settings.provider === "gemini" ? "Gemini" : "Provedor";
           const detail = typeof providerMessage === "string" && providerMessage.trim()
             ? ` ${providerLabel}: ${providerMessage.slice(0, 300)}`
             : "";
-          sendJson(res, 502, { error: `O provedor de IA respondeu com HTTP ${upstream.status}.${detail}` });
+          sendJson(res, 502, { error: `O provedor de IA (${endpoint.hostname}) respondeu com HTTP ${upstream.status}.${detail}` });
           return;
         }
 
