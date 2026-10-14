@@ -16,46 +16,7 @@ const attachmentRemove = document.querySelector("#attachment-remove");
 const conversation = [];
 let currentAttachment = null;
 
-// Configurar o renderizador do Marked (para suportar Tabelas, Citações e Códigos perfeitamente)
-function setupMarked() {
-  if (typeof window.marked !== "undefined") {
-    const renderer = new window.marked.Renderer();
-
-    // Customizar renderização de blocos de código
-    renderer.code = function (codeText, lang) {
-      const code = typeof codeText === "object" ? codeText.text || "" : codeText || "";
-      const language = (typeof codeText === "object" ? codeText.lang : lang) || "código";
-      const escapedCode = escapeHtml(code);
-      return `
-        <div class="code-container">
-          <div class="code-header">
-            <span class="code-lang">${escapeHtml(language)}</span>
-            <button type="button" class="copy-code-btn" data-code="${encodeURIComponent(code)}">
-              📋 Copiar código
-            </button>
-          </div>
-          <pre><code class="language-${escapeHtml(language)}">${escapedCode}</code></pre>
-        </div>
-      `;
-    };
-
-    // Envolver tabelas em um container responsivo com barra de rolagem se necessário
-    renderer.table = function (header, body) {
-      const h = typeof header === "object" ? header.header || "" : header;
-      const b = typeof header === "object" ? header.rows || "" : body;
-      return `<div class="table-container"><table><thead>${h}</thead><tbody>${b}</tbody></table></div>`;
-    };
-
-    window.marked.setOptions({
-      renderer,
-      gfm: true,
-      breaks: true,
-    });
-  }
-}
-setupMarked();
-
-// Carregar modelos disponíveis na inicialização (filtrando modelos não compatíveis)
+// Carregar modelos disponíveis na inicialização (filtrando modelos árabes e não textuais)
 async function loadAvailableModels() {
   try {
     const res = await fetch("/api/models");
@@ -90,12 +51,12 @@ async function loadAvailableModels() {
       }
     }
   } catch {
-    // Mantém fallback
+    // Mantém fallback se a rota falhar
   }
 }
 loadAvailableModels();
 
-// Sanitização básica
+// Sanitização básica contra XSS
 function escapeHtml(str) {
   return String(str || "")
     .replaceAll("&", "&amp;")
@@ -105,19 +66,57 @@ function escapeHtml(str) {
     .replaceAll("'", "&#039;");
 }
 
-// Renderizar Markdown em HTML completo
+// Renderizar Markdown em HTML completo (com suporte perfeito a tabelas, citações e listas)
 function renderContent(rawText) {
   if (typeof window.marked !== "undefined" && typeof window.marked.parse === "function") {
     try {
-      return window.marked.parse(rawText);
+      return window.marked.parse(rawText, { gfm: true, breaks: true });
     } catch {
-      // Fallback se o marked der erro
+      // Fallback simples se der erro
     }
   }
   return `<p>${escapeHtml(rawText).replace(/\n\n+/g, "</p><p>").replace(/\n/g, "<br>")}</p>`;
 }
 
-// Criar mensagem no chat
+// Aprimorar blocos de código adicionando cabeçalho escuro e botão de cópia
+function enhanceCodeBlocks(container) {
+  container.querySelectorAll("pre").forEach((pre) => {
+    if (pre.parentElement.classList.contains("code-container")) return;
+    const codeEl = pre.querySelector("code");
+    const rawCode = codeEl ? codeEl.innerText : pre.innerText;
+    let lang = "código";
+    if (codeEl) {
+      for (const cls of codeEl.classList) {
+        if (cls.startsWith("language-")) {
+          lang = cls.replace("language-", "");
+          break;
+        }
+      }
+    }
+    const wrapper = document.createElement("div");
+    wrapper.className = "code-container";
+
+    const header = document.createElement("div");
+    header.className = "code-header";
+    header.innerHTML = `
+      <span class="code-lang">${escapeHtml(lang)}</span>
+      <button type="button" class="copy-code-btn">📋 Copiar código</button>
+    `;
+
+    header.querySelector(".copy-code-btn").addEventListener("click", async () => {
+      await navigator.clipboard.writeText(rawCode);
+      const btn = header.querySelector(".copy-code-btn");
+      btn.textContent = "✓ Copiado!";
+      setTimeout(() => (btn.textContent = "📋 Copiar código"), 2000);
+    });
+
+    pre.parentNode.insertBefore(wrapper, pre);
+    wrapper.appendChild(header);
+    wrapper.appendChild(pre);
+  });
+}
+
+// Criar elemento de mensagem na tela
 function addMessage(role, content, options = {}) {
   const article = document.createElement("article");
   article.className = `message ${role === "user" ? "user-message" : "assistant-message"}`;
@@ -154,7 +153,7 @@ function addMessage(role, content, options = {}) {
     bubble.append(badge);
   }
 
-  // Se for imagem gerada por IA
+  // Se for imagem gerada
   if (options.generatedImageUrl) {
     const imgContainer = document.createElement("div");
     imgContainer.className = "generated-image-card";
@@ -178,13 +177,14 @@ function addMessage(role, content, options = {}) {
     imgContainer.append(img, actions);
     bubble.append(imgContainer);
   } else {
-    // Markdown com suporte a tabelas, citações, listas e formatação
+    // Markdown completo
     const mdContainer = document.createElement("div");
     mdContainer.className = "markdown-body";
     mdContainer.innerHTML = renderContent(content);
+    enhanceCodeBlocks(mdContainer);
     bubble.append(mdContainer);
 
-    // Barra de ações (Copiar, Baixar TXT/DOC/PDF) para respostas da IA
+    // Barra de ações (Copiar, TXT, DOC, PDF) para respostas da IA
     if (role === "assistant") {
       const actionsBar = document.createElement("div");
       actionsBar.className = "message-actions-bar";
@@ -232,17 +232,6 @@ function addMessage(role, content, options = {}) {
   article.append(bubble);
   messagesContainer.append(article);
   article.scrollIntoView({ behavior: "smooth", block: "nearest" });
-
-  // Event listener para botões de cópia de código
-  article.querySelectorAll(".copy-code-btn").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const rawCode = decodeURIComponent(btn.dataset.code || "");
-      await navigator.clipboard.writeText(rawCode);
-      const originalText = btn.textContent;
-      btn.textContent = "✓ Copiado!";
-      setTimeout(() => (btn.textContent = originalText), 2000);
-    });
-  });
 }
 
 function downloadBlob(content, fileName, mimeType) {
@@ -330,22 +319,6 @@ function formatBytes(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-// Detectar se o usuário pediu para gerar uma imagem
-function extractImagePrompt(text) {
-  const clean = text.trim();
-  if (clean.toLowerCase().startsWith("/imagem")) {
-    return clean.replace(/^\/imagem\s*/i, "").trim();
-  }
-
-  const pattern = /^\s*(desenhe|desenha|gere\s+uma\s+imagem|crie\s+uma\s+imagem|fa[çc]a\s+uma\s+imagem|gera\s+uma\s+imagem|cria\s+uma\s+imagem|gere\s+uma\s+foto|crie\s+uma\s+foto|fa[çc]a\s+uma\s+foto|imagem\s+de|foto\s+de)\s*(de\s+|do\s+|da\s+|um\s+|uma\s+)?(.*)$/i;
-  const match = clean.match(pattern);
-  if (match && match[3]?.trim()) {
-    return match[3].trim();
-  }
-
-  return null;
-}
-
 // Envio de Mensagens
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -361,11 +334,11 @@ form.addEventListener("submit", async (event) => {
   fileInput.value = "";
   attachmentPreview.hidden = true;
 
-  // 1. FLUXO DE GERAÇÃO DE IMAGEM
-  const detectedImagePrompt = extractImagePrompt(prompt);
-  if (detectedImagePrompt !== null) {
-    if (!detectedImagePrompt) {
-      errorMessage.textContent = "Digite o que você quer desenhar (ex: desenhe um cavalo comendo banana e assistindo tv).";
+  // Se o usuário pedir imagem explicitamente com /imagem
+  if (prompt.toLowerCase().startsWith("/imagem ")) {
+    const imagePrompt = prompt.replace(/^\/imagem\s*/i, "").trim();
+    if (!imagePrompt) {
+      errorMessage.textContent = "Digite o que você quer desenhar após /imagem.";
       errorMessage.hidden = false;
       return;
     }
@@ -377,12 +350,12 @@ form.addEventListener("submit", async (event) => {
       const response = await fetch("/api/generate-image", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: detectedImagePrompt }),
+        body: JSON.stringify({ prompt: imagePrompt }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Não foi possível gerar a imagem.");
 
-      addMessage("assistant", `Aqui está a sua imagem para: **"${detectedImagePrompt}"**`, {
+      addMessage("assistant", `Aqui está a sua imagem para: **"${imagePrompt}"**`, {
         generatedImageUrl: data.imageUrl,
       });
     } catch (error) {
@@ -395,7 +368,7 @@ form.addEventListener("submit", async (event) => {
     return;
   }
 
-  // 2. FLUXO PADRÃO DE CHAT
+  // FLUXO PRINCIPAL: Chat com a IA (Textos, Cálculos, Tabelas, Código, Documentos)
   let userText = prompt;
   let userImage = null;
 
