@@ -52,7 +52,7 @@ function validateMessages(messages) {
   return messages.every(
     (message) =>
       message &&
-      ["user", "assistant"].includes(message.role) &&
+      ["user", "assistant", "system"].includes(message.role) &&
       typeof message.content === "string" &&
       message.content.trim().length > 0 &&
       message.content.length <= MAX_MESSAGE_LENGTH &&

@@ -23,9 +23,15 @@ async function loadAvailableModels() {
     if (!res.ok) return;
     const data = await res.json();
     if (Array.isArray(data.models) && data.models.length > 0) {
-      // Filtrar modelos recomendados para chat / visão
+      // Filtrar modelos recomendados para chat / visão (remover áudio, guardrails e modelos em árabe)
       const textModels = data.models.filter(
-        (m) => !m.includes("whisper") && !m.includes("guard") && !m.includes("orpheus"),
+        (m) =>
+          !m.includes("whisper") &&
+          !m.includes("guard") &&
+          !m.includes("orpheus") &&
+          !m.includes("allam") &&
+          !m.includes("arabic") &&
+          !m.includes("safeguard"),
       );
       if (textModels.length > 0) {
         modelSelect.innerHTML = "";
@@ -39,6 +45,10 @@ async function loadAvailableModels() {
           else if (model === "gemini-3.8-flash") label = "Gemini 3.8 Flash";
           opt.textContent = label;
           modelSelect.append(opt);
+        }
+        // Garantir que o mais potente seja o padrão
+        if (textModels.includes("openai/gpt-oss-120b")) {
+          modelSelect.value = "openai/gpt-oss-120b";
         }
       }
     }
@@ -320,6 +330,22 @@ imageModeBtn.addEventListener("click", () => {
   promptInput.focus();
 });
 
+function extractImagePrompt(text) {
+  const clean = text.trim();
+  if (clean.toLowerCase().startsWith("/imagem")) {
+    return clean.replace(/^\/imagem\s*/i, "").trim();
+  }
+
+  // Identificar comandos naturais como "desenhe...", "gere uma imagem de...", etc.
+  const pattern = /^\s*(desenhe|desenha|gere\s+uma\s+imagem|crie\s+uma\s+imagem|fa[çc]a\s+uma\s+imagem|gera\s+uma\s+imagem|cria\s+uma\s+imagem|gere\s+uma\s+foto|crie\s+uma\s+foto|fa[çc]a\s+uma\s+foto|imagem\s+de|foto\s+de)\s*(de\s+|do\s+|da\s+|um\s+|uma\s+)?(.*)$/i;
+  const match = clean.match(pattern);
+  if (match && match[3]?.trim()) {
+    return match[3].trim();
+  }
+
+  return null;
+}
+
 // Envio de Mensagens
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -335,11 +361,11 @@ form.addEventListener("submit", async (event) => {
   fileInput.value = "";
   attachmentPreview.hidden = true;
 
-  // 1. FLUXO DE GERAÇÃO DE IMAGEM (/imagem ...)
-  if (prompt.startsWith("/imagem")) {
-    const imagePrompt = prompt.replace(/^\/imagem\s*/i, "").trim();
-    if (!imagePrompt) {
-      errorMessage.textContent = "Digite o que você quer desenhar após /imagem (ex: /imagem um gato no espaço).";
+  // 1. FLUXO DE GERAÇÃO DE IMAGEM (Detectado automaticamente ou por /imagem)
+  const detectedImagePrompt = extractImagePrompt(prompt);
+  if (detectedImagePrompt !== null) {
+    if (!detectedImagePrompt) {
+      errorMessage.textContent = "Digite o que você quer desenhar (ex: desenhe um cavalo comendo banana e assistindo tv).";
       errorMessage.hidden = false;
       return;
     }
@@ -352,12 +378,12 @@ form.addEventListener("submit", async (event) => {
       const response = await fetch("/api/generate-image", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: imagePrompt }),
+        body: JSON.stringify({ prompt: detectedImagePrompt }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Não foi possível gerar a imagem.");
 
-      addMessage("assistant", `Aqui está a sua imagem para: **"${imagePrompt}"**`, {
+      addMessage("assistant", `Aqui está a sua imagem para: **"${detectedImagePrompt}"**`, {
         generatedImageUrl: data.imageUrl,
       });
     } catch (error) {
@@ -397,13 +423,18 @@ form.addEventListener("submit", async (event) => {
   sendButton.disabled = true;
   sendButton.querySelector("span").textContent = "Enviando...";
 
+  const systemMessage = {
+    role: "system",
+    content: "Você é um assistente de inteligência artificial útil e competente. Responda SEMPRE em português do Brasil de forma clara, natural e com formatação Markdown e blocos de código quando apropriado.",
+  };
+
   try {
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model: modelSelect.value,
-        messages: conversation,
+        messages: [systemMessage, ...conversation],
       }),
     });
     const data = await response.json();
