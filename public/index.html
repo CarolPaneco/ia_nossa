@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>Assistente de IA da empresa</title>
+    <link rel="stylesheet" href="/style.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <main class="app">
+      <header class="header">
+        <div class="brand-mark" aria-hidden="true">IA</div>
+        <div>
+          <p class="eyebrow">ESPAÇO DE TRABALHO</p>
+          <h1>Assistente de IA</h1>
+        </div>
+        <span class="status"><span class="status-dot"></span> Portal interno</span>
+      </header>
+
+      <section class="notice" aria-label="Aviso de privacidade">
+        <span class="notice-icon" aria-hidden="true">i</span>
+        <p>Use apenas com informações permitidas pela empresa. As mensagens são enviadas ao provedor de IA configurado pela equipe responsável.</p>
+      </section>
+
+      <section class="conversation" aria-label="Conversa">
+        <div id="messages" class="messages" aria-live="polite" aria-relevant="additions text">
+          <article class="message assistant-message">
+            <div class="avatar" aria-hidden="true">IA</div>
+            <div class="bubble">
+              <p>Olá! Como posso ajudar no seu trabalho?</p>
+            </div>
+          </article>
+        </div>
+        <p id="error" class="error" role="alert" hidden></p>
+        <form id="chat-form" class="composer">
+          <label class="sr-only" for="prompt">Escreva sua mensagem</label>
+          <textarea id="prompt" name="prompt" rows="1" maxlength="8000" placeholder="Escreva sua mensagem..." required></textarea>
+          <button id="send" type="submit" aria-label="Enviar mensagem">
+            <span>Enviar</span>
+            <svg aria-hidden="true" viewBox="0 0 20 20" width="16" height="16">
+              <path d="M3 10h13M10 4l6 6-6 6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7"/>
+            </svg>
+          </button>
+        </form>
+        <p class="footnote">As respostas podem conter erros. Confira informações importantes.</p>
+      </section>
+    </main>
+  </body>
+</html>

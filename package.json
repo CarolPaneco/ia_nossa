@@ -1,0 +1,13 @@
+{
+  "name": "portal-ia-aprovada",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Portal web para um provedor de IA autorizado pela empresa",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
